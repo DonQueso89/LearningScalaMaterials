@@ -49,11 +49,22 @@
  *
  * Future: A monadic collection holding a potential return value of some task
  * that is executing in a separate thread. (and therefore a monitor of that thread).
+ * Futures operate in JVM threads, concurrent processes inside the JVM. 
+ * Invoking them with a function will execute that function in a separate thread
+ * while the main thread continues to operate. Futures can be managed async
+ * (while the main thread continues to operate) or sync (while the main thread
+ * waits for them to complete).
  *
  */
 import collection.mutable.Builder
 import collection.mutable.Buffer
 import java.io.File
+import concurrent.ExecutionContext.Implicits.global
+import collection.mutable.ListBuffer
+import concurrent.Future
+import java.util.Date;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
 
 @annotation.tailrec
 def fibBuilder(x: Int, result: Builder[Int, List[Int]]): List[Int] = {
@@ -218,4 +229,55 @@ def safeGetProperty(propName: String): String = {
     case None => "Unknown";
     case Some(x) => x; 
   }
+}
+
+
+def getGithubCommits(params: (String, String, String)): List[(String, String, String)] = {
+  /*
+   * Write a function that retrieves recent commits for a given user, repo and
+   * branch on Github and prints out the date, title and author for each commit.
+   */
+  val resultList = ListBuffer[(String, String, String)]()
+  params match {
+    case (user, repository, branch) => {
+      val url = s"https://github.com/$user/$repository/commits/$branch/.atom"
+      val rawResult = io.Source.fromURL(url).getLines.map(_.trim).mkString("").split("<entry>")
+      for (entry <- rawResult.slice(1, rawResult.length)) {
+        val dateRgx = """.*<updated>(.*)</updated>.*""".r
+        val authorRgx = """.*<author><name>(.*)</name>.*""".r
+        val titleRgx = """.*<title>(.*)</title>.*""".r
+
+        val dateRgx(date) = entry
+        val authorRgx(author) = entry
+        val titleRgx(title) = entry
+        resultList += ((date, author, title))
+      }
+    }
+    case _ => println("Not enough arguments specified")
+  }
+  resultList toList
+}
+
+def parseResults(results: List[List[(String, String, String)]]) = {
+  /*
+   * Mix the commits together, sort by date and add a repo column
+   */
+  val dateFmt = new SimpleDateFormat("yyyy-MM-dd")
+  val flatResult = results.flatten.sortWith((x, y) => { dateFmt.parse(x._1) after dateFmt.parse(y._1) })
+  for (result <- flatResult) {
+    val (date, author, title) = result
+    println(s"Date: $date Author: $author Title: ${title.slice(0, 20)}")
+  }
+}
+
+def getGithubCommitsConcurrent(projects: List[(String, String, String)]) = {
+  /*
+   * Take a list of projects, and retrieve data concurrently with Futures.
+   * Future.sequence returns a 'master' Future that holds a list of the results
+   * of its "sub-futures" if they are all successful or a Failure. 
+   * Reminder: Failure and Success are subclasses of Try.
+   */
+  val possibleResults = Future sequence projects.map((p) => Future(getGithubCommits(p)))
+  possibleResults onSuccess { case(x) => parseResults(x) }
+  possibleResults onFailure { case(x) => println(s"Got exception: $x");  }
 }
